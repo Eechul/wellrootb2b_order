@@ -17,6 +17,18 @@ foreach ($f in @("dist\$AssetName", "dist\update.json")) {
     if (-not (Test-Path $f)) { throw "$f 가 없습니다. 먼저 .\build.ps1 을 실행하세요." }
 }
 
+# 🚨 코드를 push 하기 전에 릴리스를 만들면 태그가 **엉뚱한 커밋**을 가리킨다.
+#   나중에 "v0.1.3 소스"를 받아도 그 exe를 만든 코드가 아니게 된다(실제로 겪음).
+$dirty = git status --porcelain
+if ($dirty) {
+    throw "커밋 안 된 변경이 있습니다. 먼저 커밋하고 push 하세요.`n$dirty"
+}
+$local = git rev-parse HEAD
+$remote = (git ls-remote origin main) -split '\s+' | Select-Object -First 1
+if ($local -ne $remote) {
+    throw "로컬 커밋이 아직 push 되지 않았습니다. `git push` 후 다시 실행하세요.`n  로컬 : $local`n  원격 : $remote"
+}
+
 # update.json의 버전이 version.py와 어긋나면 배포 사고다 — 먼저 막는다
 $manifest = Get-Content "dist\update.json" -Raw | ConvertFrom-Json
 if ($manifest.version -ne $version) {

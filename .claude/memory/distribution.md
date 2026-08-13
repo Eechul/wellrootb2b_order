@@ -99,8 +99,47 @@ python app.py --selftest      # 또는 WellrootOrder.exe --selftest
 5. **`--windowed`는 시작 시 예외를 조용히 삼킨다.** 사장님 눈에는 "눌렀는데 아무 일 없음"으로 보인다.
    `main()`이 모든 예외를 잡아 `error.log`에 남기고 창으로 알린다.
 
-## 아직 안 한 것
+## 배포처 확정: GitHub Releases (2026-08-12)
 
-- 자동 업데이트의 **교체·재실행**은 실제 새 버전을 올려봐야 끝까지 검증된다.
-  (버전 비교·매니페스트 확인·다운로드 검증은 로컬 서버로 테스트 완료, frozen 판정도 확인)
-- 배포처(GitHub Releases 등) 미정 → `config.json`의 `update_url`이 비어 있으면 확인을 건너뛴다.
+저장소: https://github.com/Eechul/wellrootb2b_order (public)
+매니페스트: `https://github.com/Eechul/wellrootb2b_order/releases/latest/download/update.json`
+
+`releases/latest/download/...` 는 **항상 최신 릴리스**로 연결된다. 앱에 박아둔 주소가 안 바뀌므로
+새 릴리스를 올리기만 하면 구버전 앱이 알아서 찾아온다.
+
+**릴리스 순서 (반드시 이 순서로):**
+```powershell
+# 1. 코드를 먼저 커밋·push  ← 안 하면 태그가 엉뚱한 커밋을 가리킨다
+git push
+# 2. 빌드
+$env:WELLROOT_NOTES = "이번 변경 내용"
+.\build.ps1
+# 3. 릴리스 업로드 (dirty/미push 이면 스스로 거부한다)
+.\release.ps1
+```
+
+`update.json`을 GitHub API 대신 쓰는 이유: **배포처를 바꿔도 코드가 그대로**고(구글 드라이브·자체 서버 가능),
+API 호출 제한이 없고, sha256을 직접 통제할 수 있다.
+
+## 🚨 자동 교체가 죽던 버그 (2026-08-12 실검증에서 발견)
+
+**다운로드까지 성공하고 교체 스크립트도 만들어지는데, 앱이 종료되는 순간 스크립트가 함께 죽었다.**
+결과적으로 앱만 사라지고 아무 일도 안 일어난다. 배포 후 터졌으면 사장님 PC에서 앱이 통째로 없어지는 사고.
+
+원인은 **윈도우 Job Object**. `DETACHED_PROCESS`로 띄워도 부모가 속한 Job이 정리될 때 자식까지 죽는다.
+
+| 방식 | 부모 종료 후 |
+|---|---|
+| `DETACHED_PROCESS \| NEW_PROCESS_GROUP` | ❌ 죽음 (기존) |
+| `DETACHED \| BREAKAWAY` | ❌ 죽음 |
+| **`CREATE_NO_WINDOW \| NEW_GROUP \| CREATE_BREAKAWAY_FROM_JOB`** | ✅ 살아남음 (채택) |
+| WMI `Win32_Process.Create` | ✅ 살아남음 (폴백) |
+
+**추가 안전장치:** 스크립트가 신호 파일(`.started`)을 만들 때까지 최대 6초 기다린 뒤에만 앱을 닫는다.
+못 뜨면 앱을 유지한 채 사유를 안내한다 — **앱만 사라지는 상황을 원천 차단**한다.
+
+**교훈: 자기 교체는 실제로 새 버전을 올려 끝까지 돌려보기 전엔 검증된 게 아니다.**
+그리고 **수정본은 그 버전부터만 효과가 있다** — 깨진 버전을 이미 받은 사람은 수동 교체뿐이다.
+그래서 v0.1.0·v0.1.1(깨진 로직)은 삭제했다.
+
+**실측: 0.1.2 → 0.1.3 자동 업데이트 14.4초, 자동 재실행까지 확인.**

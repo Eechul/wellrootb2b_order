@@ -125,10 +125,18 @@ python order.py 발주.xlsx --force        # 이미 결제된 배송지도 다�
 
 ## 배포 (거래처 사장님들께)
 
+저장소: https://github.com/Eechul/wellrootb2b_order · 배포는 **GitHub Releases**
+
 ```powershell
-.\build.ps1                          # dist\WellrootOrder.exe + dist\update.json
-.\dist\WellrootOrder.exe --selftest  # ★ 배포 전 필수 — 결과는 selftest.log
+git push                                    # ★ 코드를 먼저 올린다 (안 하면 태그가 어긋난다)
+$env:WELLROOT_NOTES = "이번 변경 내용"
+.\build.ps1                                 # dist\ 에 exe + update.json
+.\dist\'웰루트 발주도우미.exe' --selftest    # ★ 배포 전 필수 — 결과는 selftest.log
+.\release.ps1                               # GitHub 릴리스로 업로드
 ```
+
+`release.ps1`은 커밋 안 된 변경이나 미push 상태면 **스스로 거부한다.**
+버전·체크섬이 어긋나도 막는다.
 
 **실측(2026-08-12): 48.3MB / GUI 기동 2.6초 / 메모리 53MB.**
 
