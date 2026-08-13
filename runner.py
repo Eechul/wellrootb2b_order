@@ -2,7 +2,8 @@
 
 화면에 찍고 사람을 기다리는 부분만 콜백으로 빼놨다:
   log(str)                     — 진행 상황 한 줄
-  ask_payment(index, total)    — 결제를 사람에게 넘기고 "next" | "quit" 을 받는다
+  ask_payment(i, total, fails) — 결제를 사람에게 넘기고 "next" | "quit" 을 받는다
+                                 fails: 이번 주문에서 담기지 못한 라인(결제 전에 보여줘야 한다)
 
 이렇게 나눠야 CLI의 input()과 GUI의 [결제했음] 버튼이 같은 흐름을 공유한다.
 """
@@ -43,6 +44,7 @@ def run_orders(
     *,
     log,
     ask_payment,
+    ask_clear_cart=None,
     history_path: str | Path,
     session_path: str | Path,
     clear_cart: bool = False,
@@ -54,7 +56,7 @@ def run_orders(
 
     mall_url = config["mall_url"]
     session_file = Path(session_path)
-    history = History(history_path)
+    history = History(history_path)   # 어떤 손상이든 예외를 던지지 않는다
     # 파일 바이트가 아니라 발주 '내용'으로 지문을 잡는다 — 엑셀을 다시 저장해도 유지된다
     excel_hash = order_fingerprint(groups)
     excel_name = Path(excel_path).name
@@ -63,9 +65,17 @@ def run_orders(
     result.report = Report(log=log)
     report = result.report
 
+    # 이력이 사라졌는데 아무 말이 없으면 중복 방지가 풀린 걸 아무도 모른다
+    log(f"지금까지 결제가 확인된 배송지 {history.paid_count}곳을 기억하고 있습니다.")
+    if history.unreadable:
+        log("⚠ 발주 이력을 읽지 못했습니다 — 이미 결제한 배송지가 다시 준비될 수 있습니다.")
+    elif history.broken_lines:
+        log(f"⚠ 발주 이력 {history.broken_lines}줄을 읽지 못했습니다 — "
+            "이미 결제한 배송지가 다시 준비될 수 있으니 주문 내용을 꼭 확인해주세요.")
+
     already = sum(1 for g in groups if history.is_paid(excel_hash, group_key(g)))
     if already and not force:
-        log(f"이미 결제를 마친 배송지 {already}곳은 건너뜁니다.")
+        log(f"이 엑셀에서 이미 결제를 마친 배송지 {already}곳은 건너뜁니다.")
 
     with sync_playwright() as p:
         try:
@@ -102,12 +112,18 @@ def run_orders(
                 )
                 return result
             if existing and not clear_cart:
-                result.error = (
-                    f"쇼핑몰 장바구니에 이미 {existing}건이 담겨 있습니다.\n"
-                    "그대로 진행하면 그 상품까지 함께 주문됩니다.\n"
-                    "쇼핑몰에서 장바구니를 비우신 뒤 다시 실행해주세요."
-                )
-                return result
+                # 손품을 줄이려고 쓰는 도구인데, 앱을 껐다 켜고 몰에 들어가 비우게 하면 안 된다.
+                # 물어볼 수 있으면 그 자리에서 비운다.
+                if ask_clear_cart and ask_clear_cart(existing):
+                    log(f"   장바구니에 있던 {existing}건을 비웁니다.")
+                    steps.clear_cart(page, dialogs, mall_url)
+                else:
+                    result.error = (
+                        f"쇼핑몰 장바구니에 이미 {existing}건이 담겨 있습니다.\n\n"
+                        "그대로 진행하면 그 상품까지 함께 주문됩니다.\n"
+                        "쇼핑몰에서 장바구니를 비우신 뒤 다시 실행해주세요."
+                    )
+                    return result
 
             for index, group in enumerate(groups, start=1):
                 key = group_key(group)
@@ -134,7 +150,9 @@ def run_orders(
 
                 before = len(report.results)
                 steps.add_lines_to_cart(page, dialogs, group.lines, report, log=log)
-                if not any(r.ok for r in report.results[before:]):
+                group_results = report.results[before:]
+                failures = [r for r in group_results if not r.ok]
+                if not any(r.ok for r in group_results):
                     log("   ❌ 담긴 상품이 하나도 없어 이 주문은 건너뜁니다.")
                     continue
 
@@ -151,8 +169,14 @@ def run_orders(
                     result.stopped = True
                     return result
 
+                if failures:
+                    # 🚨 빠진 상품을 **결제 전에** 알려야 한다. 결제가 다 끝난 뒤 요약하면
+                    #   이미 일부만 주문된 상태가 되어 되돌릴 수 없다.
+                    log(f"   ⚠ 이 주문에서 {len(failures)}건이 빠졌습니다:")
+                    for r in failures:
+                        log(f"      {r.row}행 {r.status.value}" + (f" — {r.detail}" if r.detail else ""))
                 log(f"   ✅ 주문 {index}/{len(groups)} 준비 완료 — 결제는 하지 않았습니다.")
-                answer = ask_payment(index, len(groups))
+                answer = ask_payment(index, len(groups), failures)
 
                 # 카페24는 주문이 완료되면 장바구니를 비운다 → 결제 여부를 이걸로 판정한다.
                 # 🚨 화면을 못 읽었으면(UNKNOWN) 절대 '결제됨'으로 기록하지 않는다.

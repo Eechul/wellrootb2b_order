@@ -157,7 +157,8 @@ class OrderApp(tk.Tk):
         self.pay_label.pack(anchor="w", padx=10, pady=(8, 4))
         row = ttk.Frame(self.pay_frame)
         row.pack(anchor="w", padx=10, pady=(0, 10))
-        ttk.Button(row, text="결제했음 — 다음으로", command=lambda: self._answer("next")).pack(side="left")
+        self.btn_paid = ttk.Button(row, text="결제했음 — 다음으로", command=lambda: self._answer("next"))
+        self.btn_paid.pack(side="left")
         ttk.Button(row, text="중단", command=lambda: self._answer("quit")).pack(side="left", padx=8)
 
         bottom = ttk.Frame(self)
@@ -296,6 +297,7 @@ class OrderApp(tk.Tk):
                 config,
                 log=lambda m="": self._events.put(("log", m)),
                 ask_payment=self._ask_payment,
+                ask_clear_cart=self._ask_clear_cart,
                 history_path=HISTORY_PATH,
                 session_path=SESSION_PATH,
             )
@@ -303,12 +305,24 @@ class OrderApp(tk.Tk):
         except Exception as e:  # noqa: BLE001
             self._events.put(("crash", f"{type(e).__name__}: {e}"))
 
-    def _ask_payment(self, index: int, total: int) -> str:
+    def _ask_payment(self, index: int, total: int, failures=()) -> str:
         """워커 스레드에서 호출된다. 사람이 버튼을 누를 때까지 여기서 멈춘다."""
         self._pay_gate.clear()
-        self._events.put(("payment", (index, total)))
+        lines = [f"{r.row}행 {r.status.value}" for r in failures]
+        self._events.put(("payment", (index, total, lines)))
         self._pay_gate.wait()
         return self._pay_answer
+
+    def _ask_clear_cart(self, count: int) -> bool:
+        """워커 스레드에서 호출된다. 장바구니에 남은 걸 비울지 사람에게 묻는다.
+
+        예전에는 여기서 그냥 멈추고 '몰에서 직접 비우고 다시 실행하세요'라고 했다.
+        손품을 줄이려고 쓰는 도구인데 앱을 껐다 켜게 만들면 안 된다.
+        """
+        self._pay_gate.clear()
+        self._events.put(("confirm_clear", count))
+        self._pay_gate.wait()
+        return self._pay_answer == "next"
 
     def _answer(self, answer: str) -> None:
         self._pay_answer = answer
@@ -325,14 +339,36 @@ class OrderApp(tk.Tk):
                 if kind == "log":
                     self._log(payload)
                 elif kind == "payment":
-                    index, total = payload
-                    self.pay_label.configure(
-                        text=f"주문 {index}/{total} 준비가 끝났습니다.\n"
+                    index, total, missing = payload
+                    base = (
+                        f"주문 {index}/{total} 준비가 끝났습니다.\n"
                         "브라우저 창에서 금액과 배송지를 확인하고 [결제하기]를 누른 뒤, "
                         "아래 버튼을 눌러주세요."
                     )
+                    if missing:
+                        # 🚨 빠진 상품은 결제 전에 눈에 띄어야 한다. 로그는 스크롤돼 안 본다.
+                        self.pay_label.configure(
+                            text=f"⚠ 이 주문에서 {len(missing)}건이 빠졌습니다 — "
+                            + ", ".join(missing)
+                            + "\n그대로 결제하면 빠진 채 주문됩니다.\n\n"
+                            + base,
+                            foreground="#c0392b",
+                        )
+                        self.btn_paid.configure(text="빠진 상품 확인했고 그래도 결제함")
+                    else:
+                        self.pay_label.configure(text=base, foreground="")
+                        self.btn_paid.configure(text="결제했음 — 다음으로")
                     self.pay_frame.pack(fill="x", padx=12, pady=(0, 6))
                     self.status.set(f"주문 {index}/{total} — 결제를 기다리는 중")
+                elif kind == "confirm_clear":
+                    ok = messagebox.askokcancel(
+                        APP_NAME,
+                        f"쇼핑몰 장바구니에 이미 {payload}건이 담겨 있습니다.\n\n"
+                        "이 상품들을 비우고 발주를 진행할까요?\n"
+                        "(비운 상품은 주문되지 않습니다)",
+                    )
+                    self._pay_answer = "next" if ok else "quit"
+                    self._pay_gate.set()
                 elif kind == "done":
                     self._finish(payload)
                 elif kind == "crash":

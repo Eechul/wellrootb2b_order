@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -51,21 +52,43 @@ class History:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self._paid: set[tuple[str, str]] = set()
+        self.broken_lines = 0  # 읽지 못한 줄 수 — 조용히 넘기지 않고 알린다
+        self.unreadable = False  # 파일 자체를 못 읽었다
         self._load()
 
     def _load(self) -> None:
+        """🚨 이력 때문에 발주가 막히면 안 된다. 어떤 손상이든 읽을 수 있는 만큼만 읽는다.
+
+        다만 **조용히 넘기지도 않는다.** 손상된 줄이 '결제 확인'이었다면
+        이미 결제한 주문을 다시 결제하게 되므로, 몇 줄을 못 읽었는지 알려야 한다.
+        """
         if not self.path.exists():
             return
-        for line in self.path.read_text(encoding="utf-8").splitlines():
+        try:
+            # errors="replace": 정전·강제종료로 깨진 바이트가 있어도 읽기는 성공시킨다
+            text = self.path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            self.unreadable = True
+            return
+
+        for line in text.splitlines():
             line = line.strip()
             if not line:
                 continue
             try:
                 entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue  # 손상된 줄은 무시한다 — 이력 때문에 발주가 막히면 안 된다
+            except Exception:
+                self.broken_lines += 1
+                continue
+            if not isinstance(entry, dict):
+                self.broken_lines += 1
+                continue
             if entry.get("status") == STATUS_PAID:
                 self._paid.add((entry.get("excel", ""), entry.get("group", "")))
+
+    @property
+    def paid_count(self) -> int:
+        return len(self._paid)
 
     def is_paid(self, excel_hash: str, group_key: str) -> bool:
         return (excel_hash, group_key) in self._paid
@@ -88,8 +111,12 @@ class History:
             "rows": rows,
             "status": status,
         }
+        # flush+fsync: 정전이나 강제 종료로 줄이 반만 쓰이는 걸 줄인다.
+        # 이 파일이 깨지면 이미 결제한 주문을 다시 결제할 수 있다.
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
         if status == STATUS_PAID:
             self._paid.add((excel_hash, group_key))
 

@@ -100,7 +100,9 @@ def print_plan(groups: list[OrderGroup]) -> None:
             print(f"    · {line.row}행  {product}{option}  ×{line.quantity}")
 
 
-def _ask_payment(index: int, total: int) -> str:
+def _ask_payment(index: int, total: int, failures=()) -> str:
+    if failures:
+        print(f"\n     ⚠ 이 주문에서 {len(failures)}건이 빠졌습니다. 그대로 결제하면 빠진 채 주문됩니다.")
     if index >= total:
         prompt = "     결제가 끝나면 Enter를 눌러 브라우저를 닫습니다... "
     else:

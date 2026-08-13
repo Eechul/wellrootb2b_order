@@ -132,11 +132,27 @@ def load(path: str | Path) -> dict:
     login = config.setdefault("login", {})
     if not isinstance(login, dict):
         login = config["login"] = {}
-    # 암호화본이 있으면 그걸 쓰고, 없으면 예전 평문 키를 그대로 받아준다.
+    config.setdefault("mall_url", DEFAULT_MALL_URL)
+
     if login.get("password_enc"):
         login["password"] = decrypt(login["password_enc"])
-    config.setdefault("mall_url", DEFAULT_MALL_URL)
+        return config
+
+    # 🚨 평문 비밀번호를 발견하면 **그 자리에서 암호화해 다시 쓴다.**
+    #   예시 파일을 복사해 쓰거나 예전 방식으로 만든 설정은 평문인데, 그냥 읽고 넘어가면
+    #   [설정]에서 다시 저장하기 전까지 영원히 평문으로 남는다.
+    #   휴대용 모드로 USB에 담으면 몰 비밀번호가 평문으로 따라다니게 된다.
+    if login.get("password"):
+        _upgrade_to_encrypted(path, config)
     return config
+
+
+def _upgrade_to_encrypted(path: Path, config: dict) -> None:
+    """평문 비밀번호를 1회 자동 마이그레이션한다. 실패해도 앱은 그대로 동작한다."""
+    try:
+        save(path, config)
+    except Exception:
+        pass
 
 
 def _quarantine(path: Path) -> None:
