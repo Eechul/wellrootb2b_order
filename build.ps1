@@ -6,9 +6,14 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
-# 실행파일 이름. 바꾸면 update.json의 url 파일명도 같이 확인할 것.
+# 사장님 PC에 놓일 파일 이름(한글).
 $AppName = "웰루트 발주도우미"
 $ExePath = "dist\$AppName.exe"
+
+# 릴리스에 올릴 자산 이름은 ASCII로 — 다운로드 URL 인코딩 문제를 피한다.
+$AssetName = "WellrootOrder.exe"
+$RepoUrl = "https://github.com/Eechul/wellrootb2b_order"
+$ReleaseNotes = if ($env:WELLROOT_NOTES) { $env:WELLROOT_NOTES } else { "" }
 
 $version = (Select-String -Path version.py -Pattern 'VERSION = "([^"]+)"').Matches[0].Groups[1].Value
 Write-Host "빌드 버전: $version" -ForegroundColor Cyan
@@ -95,19 +100,21 @@ if ($thumb) {
 $sizeMB = [math]::Round((Get-Item $exe).Length / 1MB, 1)
 $sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
 
-# 자동 업데이트용 매니페스트. url은 실제 배포처 주소로 바꿔서 함께 올린다.
+# 릴리스에 올릴 때는 ASCII 이름을 쓴다 — 다운로드 URL에 한글이 들어가면 인코딩 문제가 생긴다.
+# 사장님 PC의 파일 이름(한글)과는 별개다. updater가 임시폴더에 ASCII로 받아 한글 이름 위에 덮어쓴다.
+Copy-Item $exe "dist\$AssetName" -Force
+
+# 자동 업데이트용 매니페스트.
 @{
     version = $version
-    url     = "https://github.com/사용자명/저장소명/releases/download/v$version/WellrootOrder.exe"  # 배포 파일명은 ASCII 권장
+    url     = "$RepoUrl/releases/download/v$version/$AssetName"
     sha256  = $sha
-    notes   = "변경 내용을 여기에 적으세요"
+    notes   = $ReleaseNotes
 } | ConvertTo-Json | Set-Content "dist\update.json" -Encoding UTF8
 
 Write-Host ""
 Write-Host "완료: $exe  ($sizeMB MB)" -ForegroundColor Green
+Write-Host "릴리스용: dist\$AssetName"
 Write-Host "sha256: $sha"
 Write-Host ""
-Write-Host "배포 순서:" -ForegroundColor Yellow
-Write-Host "  1. dist\update.json 의 url 을 실제 배포 주소로 수정"
-Write-Host "  2. exe(배포 시 ASCII 이름 권장)와 update.json 을 릴리스에 함께 업로드"
-Write-Host "  3. 사장님들 앱은 다음 실행 때 update.json 을 보고 스스로 갱신"
+Write-Host "다음: .\release.ps1 로 GitHub 릴리스에 올린다" -ForegroundColor Yellow

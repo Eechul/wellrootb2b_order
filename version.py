@@ -3,7 +3,7 @@
 배포할 때마다 올린다. 형식은 `major.minor.patch` 숫자만 — 비교가 단순해야 한다.
 """
 
-VERSION = "0.1.0"
+VERSION = "0.1.3"
 APP_NAME = "웰루트 발주 도우미"
 
 # 문의 창구 — 창 아래 [문의하기]가 이 주소를 연다.
@@ -16,7 +16,11 @@ SUPPORT_HINT = "· 자동화 문의"
 # 🚨 설정 파일이 아니라 **코드에 박아둔다.** 사장님이 처음 설치하면 config.json에
 #   update_url 키가 없어서, 설정에만 의존하면 신규 사용자는 영원히 업데이트가 안 된다.
 #   (config.json에 update_url이 있으면 그쪽이 우선 — 테스트용 우회로로 쓴다)
-DEFAULT_UPDATE_URL = ""  # TODO: 배포처 정해지면 update.json 주소를 넣을 것
+#   `releases/latest/download/...` 는 **항상 최신 릴리스**의 자산을 가리킨다.
+#   버전을 URL에 박지 않으므로 새 릴리스를 올리기만 하면 구버전 앱이 알아서 찾아온다.
+DEFAULT_UPDATE_URL = (
+    "https://github.com/Eechul/wellrootb2b_order/releases/latest/download/update.json"
+)
 
 
 def as_tuple(text: str) -> tuple[int, ...]:

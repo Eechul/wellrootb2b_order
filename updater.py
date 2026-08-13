@@ -33,6 +33,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import tempfile
 import urllib.request
 from dataclasses import dataclass
@@ -122,12 +123,16 @@ def apply_and_restart(new_exe: Path) -> None:
     target = current_exe()
     backup = target.with_suffix(".exe.old")
     script = Path(tempfile.gettempdir()) / f"wellroot_update_{os.getpid()}.ps1"
+    started = script.with_suffix(".started")
+    started.unlink(missing_ok=True)
 
     # ⚠ 배치(.bat)가 아니라 PowerShell을 쓰는 이유:
     #   실행파일 이름이 한글이라 cmd의 ANSI 코드페이지에 의존하면 사용자 윈도우 언어에 따라 깨진다.
     #   PowerShell은 BOM 붙은 UTF-8을 지역 설정과 무관하게 제대로 읽는다.
     script.write_text(
         f"""$ErrorActionPreference = 'SilentlyContinue'
+# 이 파일이 생겨야 파이썬이 앱을 닫는다 — 스크립트가 안 뜨면 앱이 그냥 사라지는 걸 막는다
+Set-Content -LiteralPath '{started}' -Value 'ok'
 $pid_ = {os.getpid()}
 $target = '{target}'
 $backup = '{backup}'
@@ -154,10 +159,57 @@ Remove-Item -LiteralPath $PSCommandPath -Force
         encoding="utf-8-sig",  # BOM 필수 — 없으면 PowerShell이 한글을 깨뜨릴 수 있다
     )
 
-    # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — 부모가 죽어도 살아남아야 한다
-    subprocess.Popen(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-         "-File", str(script)],
-        creationflags=0x00000008 | 0x00000200,
-        close_fds=True,
+    _launch_detached(script)
+
+    # 🚨 스크립트가 실제로 떴는지 확인하고 나서 앱을 닫는다.
+    #   안 그러면 보안정책·백신이 막았을 때 앱만 사라지고 아무 일도 안 일어난다.
+    for _ in range(60):  # 최대 6초
+        if started.exists():
+            started.unlink(missing_ok=True)
+            return
+        time.sleep(0.1)
+
+    script.unlink(missing_ok=True)
+    raise RuntimeError(
+        "이 PC의 보안 설정 때문에 자동 교체를 시작하지 못했습니다.\n\n"
+        f"새 버전을 직접 받아 바꿔주세요:\n{new_exe}\n\n"
+        "담당자에게 알려주시면 도와드리겠습니다."
+    )
+
+
+# 프로세스 생성 플래그
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+_CREATE_NO_WINDOW = 0x08000000
+_CREATE_BREAKAWAY_FROM_JOB = 0x01000000  # 부모의 Job Object에서 빠져나온다
+
+
+def _launch_detached(script: Path) -> None:
+    """부모(앱)가 죽어도 살아남는 방식으로 PowerShell을 띄운다.
+
+    ⚠ `DETACHED_PROCESS`만으로는 **부모와 함께 죽는다**(실측).
+      앱이 Job Object 안에서 실행되면 자식도 같이 정리되기 때문이다.
+      `CREATE_BREAKAWAY_FROM_JOB`으로 명시적으로 빠져나와야 살아남는다.
+      Job이 breakaway를 막는 환경도 있어서 WMI 생성을 폴백으로 둔다.
+    """
+    args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-WindowStyle", "Hidden", "-File", str(script)]
+    try:
+        subprocess.Popen(
+            args,
+            creationflags=_CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP | _CREATE_BREAKAWAY_FROM_JOB,
+            close_fds=True,
+        )
+        return
+    except Exception:
+        pass
+
+    # 폴백: WMI로 만들면 호출자의 Job에 속하지 않는다
+    quoted = " ".join(f'"{a}"' if " " in a else a for a in args)
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         f"Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
+         f"-Arguments @{{CommandLine='{quoted}'}} | Out-Null"],
+        creationflags=_CREATE_NO_WINDOW,
+        timeout=30,
+        check=False,
     )
