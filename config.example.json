@@ -1,0 +1,12 @@
+{
+  "mall_url": "https://wellrootb2b.com",
+  "login": {
+    "id": "여기에-아이디",
+    "password": "여기에-비밀번호"
+  },
+  "update_url": "https://github.com/사용자명/저장소명/releases/latest/download/update.json",
+  "headless": false,
+  "slow_mo_ms": 100,
+  "session_file": "session.json",
+  "browser_channel": "chrome"
+}
